@@ -1,2 +1,2 @@
 # shortifyme
-WP URL Shortner with Custom Domain
+ShortifyMe - A Wordpress URL Shortner with Custom Domain

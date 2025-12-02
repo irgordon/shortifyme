@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name:       ShortifyMe
- * Description:       A secure URL shortener adhering to strict prefixing and WP standards.
- * Version:           3.5
+ * Description:       A secure URL shortener with comprehensive Admin Notices and Feedback.
+ * Version:           3.6
  * Author:            Ian R. Gordon
  * Author URI:        https://iangordon.app
  * License:           GPL v3
@@ -19,12 +19,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 /**
  * Class ShortifyMe_Plugin
- * * Best Practice: The class name is prefixed with "ShortifyMe_" to avoid 
- * collision with other plugins that might have a class named "Plugin" or "LinkManager".
  */
 class ShortifyMe_Plugin {
 
-    // Properties are encapsulated, but we prefix values where they interact with WP Core
     private $shortifyme_table_name; 
     private $shortifyme_option_name    = 'shortifyme_custom_domain';
     private $shortifyme_menu_slug      = 'shortifyme';
@@ -32,7 +29,6 @@ class ShortifyMe_Plugin {
 
     public function __construct() {
         global $wpdb;
-        // Best Practice: Table name relies on WP prefix + Plugin Prefix
         $this->shortifyme_table_name = $wpdb->prefix . 'shortifyme_urls';
 
         // Lifecycle Hooks
@@ -50,13 +46,11 @@ class ShortifyMe_Plugin {
 
     /**
      * Activation Hook
-     * Function name is prefixed (though strictly not required inside a class, it helps readability)
      */
     public function shortifyme_activate() {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
 
-        // Best Practice: SQL keywords uppercase, table and column names specific
         $sql = "CREATE TABLE $this->shortifyme_table_name (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
             title text NOT NULL,
@@ -71,9 +65,6 @@ class ShortifyMe_Plugin {
         dbDelta( $sql );
     }
 
-    /**
-     * Deactivation Hook
-     */
     public function shortifyme_deactivate() {
         flush_rewrite_rules();
     }
@@ -115,14 +106,12 @@ class ShortifyMe_Plugin {
      * Settings API Initialization
      */
     public function shortifyme_settings_init() {
-        // Best Practice: Prefix the Option Group
         register_setting(
             'shortifyme_options_group', 
             $this->shortifyme_option_name,
             array( 'sanitize_callback' => 'esc_url_raw' )
         );
 
-        // Best Practice: Prefix the Section ID
         add_settings_section(
             'shortifyme_main_section',
             'Domain Configuration',
@@ -130,7 +119,6 @@ class ShortifyMe_Plugin {
             $this->shortifyme_settings_slug
         );
 
-        // Best Practice: Prefix the Field ID
         add_settings_field(
             'shortifyme_domain_field',
             'Custom Short Domain',
@@ -157,13 +145,17 @@ class ShortifyMe_Plugin {
     }
 
     /**
-     * Page: Settings (Uses Options API)
+     * Page: Settings
+     * UPDATED: Now uses settings_errors() to display success/fail messages.
      */
     public function shortifyme_render_settings() {
         if ( ! current_user_can( 'manage_options' ) ) return;
         ?>
         <div class="wrap">
             <h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
+            
+            <?php settings_errors(); ?>
+            
             <form action="options.php" method="post">
                 <?php
                 settings_fields( 'shortifyme_options_group' );
@@ -176,13 +168,15 @@ class ShortifyMe_Plugin {
     }
 
     /**
-     * Page: Links (Manual DB handling)
+     * Page: Links
+     * UPDATED: Handles manual Logic with Redirects and Notices
      */
     public function shortifyme_render_links() {
         global $wpdb;
         $base_domain = get_option( $this->shortifyme_option_name, home_url() );
+        $errors = array();
 
-        // Best Practice: Prefix POST variables to prevent conflicts with other plugins
+        // 1. Handle Form Submission (Add New)
         if ( isset( $_POST['shortifyme_submit'] ) && check_admin_referer( 'shortifyme_new_link_nonce' ) ) {
             
             $raw_url = isset($_POST['shortifyme_url']) ? wp_unslash($_POST['shortifyme_url']) : '';
@@ -190,7 +184,6 @@ class ShortifyMe_Plugin {
             $title   = sanitize_text_field( $_POST['shortifyme_title'] ?? '' );
             $slug    = sanitize_key( $_POST['shortifyme_slug'] ?? '' );
 
-            $errors = array();
             if ( empty( $url ) ) $errors[] = "Target URL is required.";
             if ( empty( $title ) ) $errors[] = "Title is required.";
 
@@ -198,42 +191,68 @@ class ShortifyMe_Plugin {
                 $slug = substr( md5( uniqid( rand(), true ) ), 0, 6 );
             } else {
                 $exists = $wpdb->get_var( $wpdb->prepare( "SELECT id FROM $this->shortifyme_table_name WHERE short_code = %s", $slug ) );
-                if ( $exists ) $errors[] = "Slug taken.";
+                if ( $exists ) $errors[] = "Slug '{$slug}' is already taken.";
             }
 
-            if ( ! empty( $errors ) ) {
-                foreach ( $errors as $err ) echo '<div class="notice notice-error is-dismissible"><p>' . esc_html( $err ) . '</p></div>';
-            } else {
+            // If no errors, insert and redirect (PRG Pattern)
+            if ( empty( $errors ) ) {
                 $wpdb->insert( 
                     $this->shortifyme_table_name, 
                     array( 'title' => $title, 'original_url' => $url, 'short_code' => $slug, 'created_at' => current_time( 'mysql' ) ), 
                     array( '%s', '%s', '%s', '%s' ) 
                 );
-                echo '<div class="notice notice-success is-dismissible"><p>Link created successfully!</p></div>';
+                
+                // Redirect to avoid resubmission and show success message
+                $redirect_url = add_query_arg( 'shortifyme_status', 'created', menu_page_url( $this->shortifyme_menu_slug, false ) );
+                wp_redirect( $redirect_url );
+                exit;
             }
         }
 
-        // Handle Delete
+        // 2. Handle Deletion
         if ( isset( $_GET['delete'] ) && check_admin_referer( 'shortifyme_delete_link_nonce' ) ) {
             $wpdb->delete( $this->shortifyme_table_name, array( 'id' => absint( $_GET['delete'] ) ), array( '%d' ) );
-            echo '<div class="notice notice-success is-dismissible"><p>Link deleted.</p></div>';
+            
+            // Redirect
+            $redirect_url = add_query_arg( 'shortifyme_status', 'deleted', menu_page_url( $this->shortifyme_menu_slug, false ) );
+            wp_redirect( $redirect_url );
+            exit;
         }
 
+        // 3. Render Page
         $results = $wpdb->get_results( "SELECT * FROM $this->shortifyme_table_name ORDER BY created_at DESC" );
         ?>
         <div class="wrap">
             <h1 class="wp-heading-inline">ShortifyMe Links</h1>
-            <a href="#" class="page-title-action" onclick="document.getElementById('shortifyme-add-wrapper').style.display='block';return false;">Add New Link</a>
+            <a href="#" class="page-title-action" onclick="document.getElementById('shortifyme-add-wrapper').style.display = (document.getElementById('shortifyme-add-wrapper').style.display === 'none' ? 'block' : 'none'); return false;">Add New Link</a>
             <hr class="wp-header-end">
+
+            <?php 
+            // A. Success Notices from Query Params (after redirect)
+            if ( isset( $_GET['shortifyme_status'] ) ) {
+                if ( $_GET['shortifyme_status'] === 'created' ) {
+                    echo '<div class="notice notice-success is-dismissible"><p><strong>Success!</strong> New link created.</p></div>';
+                } elseif ( $_GET['shortifyme_status'] === 'deleted' ) {
+                    echo '<div class="notice notice-success is-dismissible"><p><strong>Success!</strong> Link deleted permanently.</p></div>';
+                }
+            }
             
-            <div id="shortifyme-add-wrapper" style="display:none; background:#fff; padding:20px; margin:20px 0; border-left:4px solid #2271b1; box-shadow:0 1px 1px rgba(0,0,0,.04);">
+            // B. Error Notices from Local Processing (slug taken, etc)
+            if ( ! empty( $errors ) ) {
+                foreach ( $errors as $err ) {
+                    echo '<div class="notice notice-error is-dismissible"><p><strong>Error:</strong> ' . esc_html( $err ) . '</p></div>';
+                }
+            }
+            ?>
+            
+            <div id="shortifyme-add-wrapper" style="<?php echo ( !empty($errors) ) ? 'display:block;' : 'display:none;'; ?> background:#fff; padding:20px; margin:20px 0; border-left:4px solid #2271b1; box-shadow:0 1px 1px rgba(0,0,0,.04);">
                 <h3>Create New Link</h3>
                 <form method="post">
                     <?php wp_nonce_field( 'shortifyme_new_link_nonce' ); ?>
                     <table class="form-table">
-                        <tr><th>Title</th><td><input type="text" name="shortifyme_title" class="regular-text" required placeholder="Campaign Name"></td></tr>
-                        <tr><th>Target URL</th><td><input type="url" name="shortifyme_url" class="regular-text" required placeholder="https://example.com"></td></tr>
-                        <tr><th>Slug</th><td><input type="text" name="shortifyme_slug" class="regular-text" placeholder="Auto-generate"></td></tr>
+                        <tr><th>Title</th><td><input type="text" name="shortifyme_title" class="regular-text" required value="<?php echo isset($_POST['shortifyme_title']) ? esc_attr($_POST['shortifyme_title']) : ''; ?>"></td></tr>
+                        <tr><th>Target URL</th><td><input type="url" name="shortifyme_url" class="regular-text" required value="<?php echo isset($_POST['shortifyme_url']) ? esc_attr($_POST['shortifyme_url']) : ''; ?>"></td></tr>
+                        <tr><th>Slug</th><td><input type="text" name="shortifyme_slug" class="regular-text" placeholder="Auto-generate" value="<?php echo isset($_POST['shortifyme_slug']) ? esc_attr($_POST['shortifyme_slug']) : ''; ?>"></td></tr>
                     </table>
                     <p class="submit"><input type="submit" name="shortifyme_submit" class="button button-primary" value="Create Link"></p>
                 </form>
@@ -253,7 +272,7 @@ class ShortifyMe_Plugin {
                         <td><?php echo number_format( $row->clicks ); ?></td>
                         <td><a href="<?php echo esc_url($qr_url); ?>" target="_blank" class="dashicons dashicons-id-alt"></a></td>
                         <td>
-                            <a href="<?php echo wp_nonce_url( admin_url('admin.php?page=shortifyme&delete=' . $row->id), 'shortifyme_delete_link_nonce' ); ?>" style="color:#a00;" onclick="return confirm('Delete?')">Delete</a>
+                            <a href="<?php echo wp_nonce_url( admin_url('admin.php?page=shortifyme&delete=' . $row->id), 'shortifyme_delete_link_nonce' ); ?>" style="color:#a00;" onclick="return confirm('Delete this link permanently?')">Delete</a>
                         </td>
                     </tr>
                     <?php endforeach; else: ?><tr><td colspan="6">No links found.</td></tr><?php endif; ?>
@@ -309,7 +328,5 @@ class ShortifyMe_Plugin {
     }
 }
 
-// Global Variable Prefixing:
-// Instead of an anonymous 'new Class()', we assign it to a unique global variable.
 global $shortifyme_plugin;
 $shortifyme_plugin = new ShortifyMe_Plugin();

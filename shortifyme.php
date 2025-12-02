@@ -1,8 +1,8 @@
 <?php
 /**
  * Plugin Name:       ShortifyMe
- * Description:       A secure URL shortener with Live DNS Validation and Native WP UI.
- * Version:           3.8
+ * Description:       A secure URL shortener with Native WP UI, Live DNS Validation, and detailed status feedback.
+ * Version:           3.9
  * Author:            Ian R. Gordon
  * Author URI:        https://iangordon.app
  * License:           GPL v3
@@ -81,9 +81,14 @@ class ShortifyMe_Plugin {
     public function shortifyme_settings_init() {
         register_setting( 'shortifyme_options_group', $this->shortifyme_option_name, array( 'sanitize_callback' => 'esc_url_raw' ) );
 
-        // Section 1: Domain Input
+        // Section: General Configuration
         add_settings_section( 'shortifyme_main_section', 'General Configuration', array( $this, 'shortifyme_section_cb' ), $this->shortifyme_settings_slug );
-        add_settings_field( 'shortifyme_domain_field', 'Domain:', array( $this, 'shortifyme_field_render' ), $this->shortifyme_settings_slug, 'shortifyme_main_section' );
+        
+        // Field 1: The Input
+        add_settings_field( 'shortifyme_domain_input', 'Domain:', array( $this, 'shortifyme_input_render' ), $this->shortifyme_settings_slug, 'shortifyme_main_section' );
+        
+        // Field 2: The Read-Only Status Row
+        add_settings_field( 'shortifyme_domain_status', 'Active Configuration:', array( $this, 'shortifyme_status_render' ), $this->shortifyme_settings_slug, 'shortifyme_main_section' );
     }
 
     public function shortifyme_section_cb() {
@@ -91,88 +96,83 @@ class ShortifyMe_Plugin {
     }
 
     /**
-     * Render the Domain Field with Logic to Check DNS
+     * Field 1: Editable Input
      */
-    public function shortifyme_field_render() {
+    public function shortifyme_input_render() {
         $value = get_option( $this->shortifyme_option_name );
-        
-        // 1. Determine Current Server IP (The IP this WordPress install is on)
-        // We use gethostbyname on the current domain to ensure we get the public-facing IP
-        $current_wp_host = parse_url( home_url(), PHP_URL_HOST );
-        $server_ip       = gethostbyname( $current_wp_host );
-
-        // 2. Determine Custom Domain Status
-        $custom_host = '';
-        $custom_ip   = '';
-        $status_icon = '';
-        $status_msg  = '';
-        $status_color= '';
-
-        if ( ! empty( $value ) ) {
-            $custom_host = parse_url( $value, PHP_URL_HOST );
-            
-            // Check if valid host was parsed
-            if ( $custom_host ) {
-                $custom_ip = gethostbyname( $custom_host );
-
-                if ( $custom_ip === $server_ip ) {
-                    // MATCH: GREEN CHECK
-                    $status_icon  = 'dashicons-yes-alt';
-                    $status_color = '#00a32a'; // Green
-                    $status_msg   = "Connected! Domain points to your Server IP ($custom_ip).";
-                } else {
-                    // MISMATCH: RED X
-                    $status_icon  = 'dashicons-dismiss';
-                    $status_color = '#d63638'; // Red
-                    $status_msg   = "Error: Domain points to $custom_ip, but your Server IP is $server_ip.";
-                }
-            } else {
-                $status_msg = "Invalid Domain URL.";
-            }
-        } else {
-            // No domain set
-            $status_msg = "Using default WordPress URL.";
-        }
         ?>
-        
         <input type="url" 
                name="<?php echo esc_attr( $this->shortifyme_option_name ); ?>" 
                value="<?php echo esc_attr( $value ); ?>" 
                class="regular-text" 
                placeholder="<?php echo esc_attr( home_url() ); ?>">
         <p class="description">Enter your custom Short Domain (FQDN), e.g., <code>https://link.mysite.com</code>.</p>
-        
-        <?php if ( ! empty( $value ) ) : ?>
-        <div style="margin-top: 10px; padding: 10px; background: #fff; border: 1px solid #c3c4c7; border-left: 4px solid <?php echo $status_color; ?>; display: inline-block;">
-            <strong style="font-size:1.1em; color: <?php echo $status_color; ?>;">
-                <span class="dashicons <?php echo $status_icon; ?>" style="vertical-align: text-bottom;"></span>
-                <?php echo esc_html( $custom_host ); ?>
-            </strong>
-            <p style="margin: 5px 0 0 0; color: #646970;">
-                <?php echo esc_html( $status_msg ); ?>
-            </p>
-        </div>
-        <?php endif; ?>
         <?php
     }
 
     /**
-     * Page: Settings (With Dynamic DNS Table)
+     * Field 2: Read-Only Success State
+     */
+    public function shortifyme_status_render() {
+        $value = get_option( $this->shortifyme_option_name );
+        
+        if ( empty( $value ) ) {
+            echo '<span class="description"><em>No custom domain configured. Using WordPress Default.</em></span>';
+        } else {
+            ?>
+            <div style="padding: 8px 12px; background: #edfaef; border: 1px solid #b8e6bf; border-left: 4px solid #00a32a; display: inline-block; border-radius: 2px;">
+                <span class="dashicons dashicons-admin-links" style="color: #00a32a; vertical-align: middle;"></span>
+                <strong style="font-size: 1.1em; color: #1d2327; margin-left: 5px;">
+                    <?php echo esc_html( $value ); ?>
+                </strong>
+            </div>
+            <p class="description">This FQDN is currently saved in your database.</p>
+            <?php
+        }
+    }
+
+    /**
+     * Page: Settings
      */
     public function shortifyme_render_settings() {
         if ( ! current_user_can( 'manage_options' ) ) return;
         
-        // Dynamic Variables for Instructions
-        $current_wp_host = parse_url( home_url(), PHP_URL_HOST );
-        $server_ip       = gethostbyname( $current_wp_host ); // The IP user needs to point to
+        // --- LIVE DNS CHECK LOGIC ---
         
+        // 1. Get WordPress Server IP
+        $current_wp_host = parse_url( home_url(), PHP_URL_HOST );
+        $server_ip       = gethostbyname( $current_wp_host );
+
+        // 2. Get Custom Domain IP
         $custom_url      = get_option( $this->shortifyme_option_name );
         $custom_host     = !empty($custom_url) ? parse_url($custom_url, PHP_URL_HOST) : 'example.com';
         
-        // Determine if using root domain (@) or subdomain
+        // Determine "A Record" Host (Root @ or Subdomain)
         $host_parts = explode('.', $custom_host);
         $dns_host_record = (count($host_parts) > 2) ? $host_parts[0] : '@'; 
 
+        // 3. Validation
+        $validation_icon = '';
+        $validation_msg  = '';
+        
+        if ( empty( $custom_url ) ) {
+            // No custom domain set
+            $validation_icon = '<span class="dashicons dashicons-warning" style="color:orange;"></span>';
+            $validation_msg  = 'Please configure a domain above first.';
+        } else {
+            $custom_ip = gethostbyname( $custom_host );
+
+            if ( $custom_ip === $server_ip ) {
+                // Success: Green Check
+                $validation_icon = '<span class="dashicons dashicons-yes-alt" style="color:green; font-size: 20px;"></span>';
+                $validation_msg  = '<span style="color:green; font-weight:bold;">Success!</span> Domain resolves to ' . esc_html($custom_ip);
+            } else {
+                // Failure: Red X
+                $validation_icon = '<span class="dashicons dashicons-dismiss" style="color:red; font-size: 20px;"></span>';
+                $validation_msg  = '<span style="color:red; font-weight:bold;">Error:</span> Resolves to ' . esc_html($custom_ip) . ' (Not ' . esc_html($server_ip) . ')';
+            }
+        }
+        
         ?>
         <div class="wrap">
             <h1><?php echo esc_html( get_admin_page_title() ); ?></h1>
@@ -190,8 +190,7 @@ class ShortifyMe_Plugin {
 
             <h2>DNS Configuration Instructions</h2>
             <p>
-                To use <strong><?php echo esc_html($custom_host); ?></strong>, log in to your Domain Registrar (e.g., GoDaddy, Namecheap) 
-                and add the following <strong>A Record</strong> to point to this WordPress installation.
+                To use <strong><?php echo esc_html($custom_host); ?></strong>, update your DNS records to point to this server.
             </p>
             
             <table class="wp-list-table widefat fixed striped">
@@ -211,8 +210,13 @@ class ShortifyMe_Plugin {
                         <td>N/A</td>
                         <td>3600 (Automatic)</td>
                         <td>
-                            <code><?php echo esc_html( $server_ip ); ?></code>
-                            <span class="dashicons dashicons-admin-site-alt3" title="This is your current Server IP" style="color:#666; cursor:help;"></span>
+                            <div style="display: flex; align-items: center; gap: 10px;">
+                                <code style="font-size:1.1em;"><?php echo esc_html( $server_ip ); ?></code>
+                                <?php echo $validation_icon; ?>
+                            </div>
+                            <p class="description" style="margin: 5px 0 0 0; font-size: 12px;">
+                                <?php echo $validation_msg; ?>
+                            </p>
                         </td>
                     </tr>
                 </tbody>
@@ -227,7 +231,7 @@ class ShortifyMe_Plugin {
                 </tfoot>
             </table>
             <p class="description" style="margin-top:10px;">
-                <em>Note: DNS propagation can take up to 24 hours. The verification icon above will turn Green once the update is detected.</em>
+                <em>Note: If you just updated your DNS, it may take up to 24 hours to propagate. Refresh this page to re-check.</em>
             </p>
         </div>
         <?php
@@ -241,7 +245,7 @@ class ShortifyMe_Plugin {
         $base_domain = get_option( $this->shortifyme_option_name, home_url() );
         $errors = array();
 
-        // Add Link
+        // Add
         if ( isset( $_POST['shortifyme_submit'] ) && check_admin_referer( 'shortifyme_new_link_nonce' ) ) {
             $raw_url = isset($_POST['shortifyme_url']) ? wp_unslash($_POST['shortifyme_url']) : '';
             $url     = esc_url_raw( $raw_url );
@@ -265,14 +269,14 @@ class ShortifyMe_Plugin {
             }
         }
 
-        // Delete Link
+        // Delete
         if ( isset( $_GET['delete'] ) && check_admin_referer( 'shortifyme_delete_link_nonce' ) ) {
             $wpdb->delete( $this->shortifyme_table_name, array( 'id' => absint( $_GET['delete'] ) ), array( '%d' ) );
             wp_redirect( add_query_arg( 'shortifyme_status', 'deleted', menu_page_url( $this->shortifyme_menu_slug, false ) ) );
             exit;
         }
 
-        // Sorting
+        // Sort
         $orderby = isset( $_GET['orderby'] ) ? sanitize_text_field( $_GET['orderby'] ) : 'created_at';
         $order   = isset( $_GET['order'] ) ? strtoupper( sanitize_text_field( $_GET['order'] ) ) : 'DESC';
         $allowed = array( 'title', 'short_code', 'original_url', 'clicks', 'created_at' );
@@ -354,9 +358,6 @@ class ShortifyMe_Plugin {
         <?php
     }
 
-    /**
-     * REST API
-     */
     public function shortifyme_api_create( $request ) {
         global $wpdb;
         $params = $request->get_json_params();
